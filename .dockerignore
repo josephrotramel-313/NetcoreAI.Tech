@@ -11,3 +11,4 @@ server/node_modules
 .dockerignore
 Dockerfile
 docker-compose.yml
+.DS_Store
