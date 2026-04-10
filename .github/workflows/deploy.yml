@@ -1,0 +1,113 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Deploy NetcoreAI.Tech to Hostinger VPS on push to main
+#
+# Flow:
+#   1. GitHub Actions SSHes into the Hostinger VPS as a non-root user in the
+#      docker group.
+#   2. On the VPS: cd /docker/netcoreai, git pull (SSH deploy key already set
+#      up on the VPS), docker compose up -d --build, prune dangling images.
+#   3. Back on the runner: curl https://netcoreai.tech and fail the job if
+#      the response is not 2xx.
+#
+# Required GitHub secrets (Settings → Secrets and variables → Actions):
+#   • VPS_HOST        — your Hostinger VPS IP or hostname (e.g. 123.45.67.89)
+#   • VPS_USER        — the non-root deploy user (e.g. deploy)
+#   • VPS_SSH_KEY     — private SSH key (PEM/OpenSSH) whose public half is in
+#                       that user's ~/.ssh/authorized_keys on the VPS
+#   • VPS_PORT        — optional, defaults to 22 if unset
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Deploy to Hostinger
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # allow manual "Run workflow" from the Actions tab
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false  # don't interrupt an in-flight deploy
+
+jobs:
+  deploy:
+    name: SSH deploy to VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout (for workflow context only)
+        uses: actions/checkout@v4
+
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          command_timeout: 10m
+          script_stop: true  # abort on first failing command
+          script: |
+            set -euo pipefail
+
+            PROJECT_DIR="/docker/netcoreai"
+            echo "==> Deploying to $PROJECT_DIR"
+            cd "$PROJECT_DIR"
+
+            echo "==> Current commit before pull:"
+            git rev-parse --short HEAD
+
+            echo "==> Fetching latest main"
+            git fetch --prune origin main
+            git reset --hard origin/main
+
+            echo "==> New commit:"
+            git rev-parse --short HEAD
+
+            echo "==> Rebuilding and restarting containers"
+            docker compose pull || true
+            docker compose up -d --build --remove-orphans
+
+            echo "==> Waiting for containers to become healthy"
+            sleep 5
+            docker compose ps
+
+            echo "==> Pruning dangling images"
+            docker image prune -f
+
+            echo "==> Deploy complete"
+
+      - name: Smoke test https://netcoreai.tech
+        run: |
+          set -euo pipefail
+          echo "Waiting 10s for Traefik to route to the new containers..."
+          sleep 10
+
+          for attempt in 1 2 3 4 5; do
+            echo "Attempt $attempt: curling https://netcoreai.tech"
+            status=$(curl -sS -o /dev/null -w "%{http_code}" -L --max-time 15 https://netcoreai.tech || echo "000")
+            echo "  → HTTP $status"
+            if [[ "$status" =~ ^2[0-9][0-9]$ ]]; then
+              echo "✓ Site is up"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "✗ Site did not return a 2xx after 5 attempts"
+          exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Deploy summary"
+            echo ""
+            echo "- **Target:** Hostinger VPS (\`${{ secrets.VPS_HOST }}\`)"
+            echo "- **Project dir:** \`/docker/netcoreai\`"
+            echo "- **Branch:** \`${{ github.ref_name }}\`"
+            echo "- **Commit:** \`${{ github.sha }}\`"
+            echo "- **Triggered by:** ${{ github.actor }}"
+            echo "- **Result:** ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
