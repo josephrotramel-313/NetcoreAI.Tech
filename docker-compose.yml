@@ -1,3 +1,19 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# NetcoreAI.Tech — Traefik-fronted stack
+#
+# Matches a Traefik instance running with `network_mode: host`, Docker
+# provider enabled, entrypoints `web` (:80) and `websecure` (:443), and a
+# Let's Encrypt HTTP-01 cert resolver named `letsencrypt`. The Traefik
+# stack also defines a global web → websecure redirect, so routers here
+# only need to live on the `websecure` entrypoint.
+#
+# Routing:
+#   • netcoreai.tech                       → web (Next.js) on :3000
+#   • netcoreai.tech + /socket.io/*        → server (Express) on :5001
+#   • www.netcoreai.tech                   → 301 redirect to netcoreai.tech
+#   • HTTP (:80)                           → 301 redirect to HTTPS (handled by Traefik globally)
+# ─────────────────────────────────────────────────────────────────────────────
+
 services:
   # ── Express backend ──────────────────────────────────────────────────────────
   server:
@@ -6,11 +22,10 @@ services:
       dockerfile: Dockerfile
     container_name: netcoreai_server
     restart: unless-stopped
-    # Not exposed to host — nginx proxies /socket.io/ to this container internally
     environment:
       PORT: "5001"
-      # * is safe here because nginx controls external access
-      ALLOWED_ORIGINS: "*"
+      # Traefik terminates TLS; only traffic arriving through it reaches us.
+      ALLOWED_ORIGINS: "https://netcoreai.tech,https://www.netcoreai.tech"
     networks:
       - app-network
     healthcheck:
@@ -19,6 +34,21 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=netcoreaitech_app-network"
+
+      # --- Socket.io router (HTTPS) ---
+      # Higher priority than the Next.js catch-all so /socket.io/* hits Express.
+      - "traefik.http.routers.netcoreai-socket.rule=Host(`netcoreai.tech`) && PathPrefix(`/socket.io`)"
+      - "traefik.http.routers.netcoreai-socket.entrypoints=websecure"
+      - "traefik.http.routers.netcoreai-socket.tls=true"
+      - "traefik.http.routers.netcoreai-socket.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.netcoreai-socket.priority=100"
+      - "traefik.http.routers.netcoreai-socket.service=netcoreai-server"
+
+      # Tell Traefik which internal port the container listens on.
+      - "traefik.http.services.netcoreai-server.loadbalancer.server.port=5001"
 
   # ── Next.js frontend ─────────────────────────────────────────────────────────
   web:
@@ -27,32 +57,53 @@ services:
       dockerfile: Dockerfile
     container_name: netcoreai_web
     restart: unless-stopped
-    # Not exposed to host — nginx proxies all traffic to this container
     environment:
       NODE_ENV: production
-      # Server-side only: Next.js API routes call Express over the internal Docker network
+      # Server-side only: Next.js API routes call Express over the internal Docker network.
       EXPRESS_INTERNAL_URL: "http://server:5001"
     depends_on:
       server:
         condition: service_healthy
     networks:
       - app-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=netcoreaitech_app-network"
 
-  # ── nginx reverse proxy ───────────────────────────────────────────────────────
-  nginx:
-    image: nginx:1.27-alpine
-    container_name: netcoreai_nginx
-    restart: unless-stopped
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
-    depends_on:
-      - web
-      - server
-    networks:
-      - app-network
+      # --- Main HTTPS router (Next.js catch-all for netcoreai.tech) ---
+      - "traefik.http.routers.netcoreai-web.rule=Host(`netcoreai.tech`)"
+      - "traefik.http.routers.netcoreai-web.entrypoints=websecure"
+      - "traefik.http.routers.netcoreai-web.tls=true"
+      - "traefik.http.routers.netcoreai-web.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.netcoreai-web.priority=10"
+      - "traefik.http.routers.netcoreai-web.service=netcoreai-web"
+      - "traefik.http.routers.netcoreai-web.middlewares=netcoreai-security-headers"
+
+      # --- www → apex redirect (HTTPS) ---
+      - "traefik.http.routers.netcoreai-www.rule=Host(`www.netcoreai.tech`)"
+      - "traefik.http.routers.netcoreai-www.entrypoints=websecure"
+      - "traefik.http.routers.netcoreai-www.tls=true"
+      - "traefik.http.routers.netcoreai-www.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.netcoreai-www.service=netcoreai-web"
+      - "traefik.http.routers.netcoreai-www.middlewares=netcoreai-www-redirect"
+      - "traefik.http.middlewares.netcoreai-www-redirect.redirectregex.regex=^https?://www\\.netcoreai\\.tech/(.*)"
+      - "traefik.http.middlewares.netcoreai-www-redirect.redirectregex.replacement=https://netcoreai.tech/$${1}"
+      - "traefik.http.middlewares.netcoreai-www-redirect.redirectregex.permanent=true"
+
+      # Tell Traefik which internal port the container listens on.
+      - "traefik.http.services.netcoreai-web.loadbalancer.server.port=3000"
+
+      # --- Security headers middleware (replaces the ones nginx was adding) ---
+      - "traefik.http.middlewares.netcoreai-security-headers.headers.frameDeny=true"
+      - "traefik.http.middlewares.netcoreai-security-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.netcoreai-security-headers.headers.browserXssFilter=true"
+      - "traefik.http.middlewares.netcoreai-security-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.netcoreai-security-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.netcoreai-security-headers.headers.stsPreload=true"
 
 networks:
+  # Internal bridge network. Traefik runs with network_mode: host and reaches
+  # these containers via the bridge's container IPs, so no shared external
+  # network is required.
   app-network:
     driver: bridge
