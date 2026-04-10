@@ -10,7 +10,7 @@ const httpServer = createServer(app)
 
 // When ALLOWED_ORIGINS=* (Docker behind nginx), cors is effectively handled
 // by nginx. Restrict to specific origins in production if Express is exposed directly.
-const allowedOrigins: string | string[] = process.env.ALLOWED_ORIGINS === '*'
+const allowedOrigins = process.env.ALLOWED_ORIGINS === '*'
   ? '*'
   : (process.env.ALLOWED_ORIGINS
       ? process.env.ALLOWED_ORIGINS.split(',')
