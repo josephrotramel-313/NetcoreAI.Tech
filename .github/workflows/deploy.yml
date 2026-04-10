@@ -2,19 +2,25 @@
 # Deploy NetcoreAI.Tech to Hostinger VPS on push to main
 #
 # Flow:
-#   1. GitHub Actions SSHes into the Hostinger VPS as a non-root user in the
-#      docker group.
-#   2. On the VPS: cd /docker/netcoreai, git pull (SSH deploy key already set
-#      up on the VPS), docker compose up -d --build, prune dangling images.
-#   3. Back on the runner: curl https://netcoreai.tech and fail the job if
-#      the response is not 2xx.
+#   1. Print the runner's public IP (helpful if Hostinger's firewall ever
+#      blocks SSH — you'll see exactly which IP needs to reach your VPS).
+#   2. Fail fast if any required secret is empty.
+#   3. SSH into the VPS as a non-root user in the docker group.
+#   4. On the VPS: cd /docker/netcoreai, git fetch + reset --hard to origin/main
+#      (guarantees a clean tree), docker compose up -d --build, prune images.
+#   5. Back on the runner: curl https://netcoreai.tech and fail if no 2xx/3xx.
 #
 # Required GitHub secrets (Settings → Secrets and variables → Actions):
 #   • VPS_HOST        — your Hostinger VPS IP or hostname (e.g. 123.45.67.89)
 #   • VPS_USER        — the non-root deploy user (e.g. deploy)
-#   • VPS_SSH_KEY     — private SSH key (PEM/OpenSSH) whose public half is in
-#                       that user's ~/.ssh/authorized_keys on the VPS
-#   • VPS_PORT        — optional, defaults to 22 if unset
+#   • VPS_SSH_KEY     — UNENCRYPTED private SSH key (PEM/OpenSSH, no passphrase).
+#                       Generate with: ssh-keygen -t ed25519 -f deploy_key -N ""
+#                       Add deploy_key.pub to ~/.ssh/authorized_keys on the VPS,
+#                       then store the contents of deploy_key as this secret.
+#                       IMPORTANT: the value must include the BEGIN/END header
+#                       lines AND end with a trailing newline, or drone-ssh
+#                       errors with "ssh: no key found".
+#   • VPS_PORT        — optional, defaults to 22 if unset.
 # ─────────────────────────────────────────────────────────────────────────────
 
 name: Deploy to Hostinger
@@ -33,11 +39,34 @@ jobs:
   deploy:
     name: SSH deploy to VPS
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
-      - name: Checkout (for workflow context only)
-        uses: actions/checkout@v4
+      - name: Show runner public IP
+        run: |
+          ip=$(curl -fsS --max-time 5 https://api.ipify.org || echo "unknown")
+          echo "Runner public IP: $ip"
+          echo "::notice title=Runner IP::$ip"
+
+      - name: Verify required secrets are present
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          missing=0
+          if [ -z "$VPS_HOST" ];    then echo "::error::VPS_HOST secret is empty";    missing=1; fi
+          if [ -z "$VPS_USER" ];    then echo "::error::VPS_USER secret is empty";    missing=1; fi
+          if [ -z "$VPS_SSH_KEY" ]; then echo "::error::VPS_SSH_KEY secret is empty"; missing=1; fi
+          if [ "$missing" = "1" ]; then exit 1; fi
+
+          # Sanity-check that the key at least looks like an OpenSSH private key.
+          # (We don't print the key itself — only a structural check.)
+          if ! printf '%s' "$VPS_SSH_KEY" | head -n1 | grep -q "BEGIN .*PRIVATE KEY"; then
+            echo "::error::VPS_SSH_KEY does not start with '-----BEGIN ... PRIVATE KEY-----'. Check the pasted value."
+            exit 1
+          fi
+          echo "All required secrets are present and the SSH key has the expected header."
 
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
@@ -46,31 +75,39 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          command_timeout: 10m
+          command_timeout: 15m
           script_stop: true  # abort on first failing command
           script: |
             set -euo pipefail
 
             PROJECT_DIR="/docker/netcoreai"
+
             echo "==> Deploying to $PROJECT_DIR"
+            if [ ! -d "$PROJECT_DIR/.git" ]; then
+              echo "ERROR: $PROJECT_DIR is not a git repository." >&2
+              echo "Clone the repo there first:" >&2
+              echo "  sudo mkdir -p $PROJECT_DIR && sudo chown \$USER:\$USER $PROJECT_DIR" >&2
+              echo "  git clone git@github.com:<you>/<repo>.git $PROJECT_DIR" >&2
+              exit 1
+            fi
+
             cd "$PROJECT_DIR"
 
-            echo "==> Current commit before pull:"
-            git rev-parse --short HEAD
+            echo "==> Commit before update: $(git rev-parse --short HEAD)"
 
             echo "==> Fetching latest main"
             git fetch --prune origin main
             git reset --hard origin/main
 
-            echo "==> New commit:"
-            git rev-parse --short HEAD
+            echo "==> Commit after update:  $(git rev-parse --short HEAD)"
+
+            echo "==> Pulling any upstream base images (locally-built images will be skipped)"
+            docker compose pull || true
 
             echo "==> Rebuilding and restarting containers"
-            docker compose pull || true
             docker compose up -d --build --remove-orphans
 
-            echo "==> Waiting for containers to become healthy"
-            sleep 5
+            echo "==> Container status:"
             docker compose ps
 
             echo "==> Pruning dangling images"
@@ -81,30 +118,31 @@ jobs:
       - name: Smoke test https://netcoreai.tech
         run: |
           set -euo pipefail
-          echo "Waiting 10s for Traefik to route to the new containers..."
-          sleep 10
 
-          for attempt in 1 2 3 4 5; do
-            echo "Attempt $attempt: curling https://netcoreai.tech"
-            status=$(curl -sS -o /dev/null -w "%{http_code}" -L --max-time 15 https://netcoreai.tech || echo "000")
-            echo "  → HTTP $status"
-            if [[ "$status" =~ ^2[0-9][0-9]$ ]]; then
-              echo "✓ Site is up"
+          echo "Waiting 15s for Traefik to route to the new containers..."
+          sleep 15
+
+          max_attempts=10
+          for attempt in $(seq 1 "$max_attempts"); do
+            echo "Attempt $attempt/$max_attempts: curling https://netcoreai.tech"
+            status=$(curl -sS -o /dev/null -w "%{http_code}" -L --max-time 20 https://netcoreai.tech || echo "000")
+            echo "  -> HTTP $status"
+            if [[ "$status" =~ ^[23][0-9][0-9]$ ]]; then
+              echo "Site is up."
               exit 0
             fi
-            sleep 5
+            sleep 10
           done
 
-          echo "✗ Site did not return a 2xx after 5 attempts"
+          echo "Site did not return a 2xx/3xx after $max_attempts attempts."
           exit 1
 
-      - name: Summary
+      - name: Deploy summary
         if: always()
         run: |
           {
             echo "### Deploy summary"
             echo ""
-            echo "- **Target:** Hostinger VPS (\`${{ secrets.VPS_HOST }}\`)"
             echo "- **Project dir:** \`/docker/netcoreai\`"
             echo "- **Branch:** \`${{ github.ref_name }}\`"
             echo "- **Commit:** \`${{ github.sha }}\`"
