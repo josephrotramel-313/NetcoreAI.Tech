@@ -109,20 +109,20 @@ export default function Footer() {
               <ul className="flex flex-col gap-3">
                 <li>
                   <a
-                    href="mailto:hello@netcoreai.tech"
+                    href="mailto:netcoreaisolutions@gmail.com"
                     className="flex items-center gap-2 text-sm text-[#888] hover:text-[#00F0FF] transition-colors"
                   >
                     <Mail className="w-4 h-4" />
-                    hello@netcoreai.tech
+                    netcoreaisolutions@gmail.com
                   </a>
                 </li>
                 <li>
                   <a
-                    href="tel:+15550000000"
+                    href="tel:+14694425018"
                     className="flex items-center gap-2 text-sm text-[#888] hover:text-[#00F0FF] transition-colors"
                   >
                     <Phone className="w-4 h-4" />
-                    +1 (555) 000-0000
+                    +1 (469) 442-5018
                   </a>
                 </li>
                 <li>

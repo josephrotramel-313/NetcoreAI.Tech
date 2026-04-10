@@ -127,7 +127,7 @@ export default function ContactForm() {
         <input
           {...register('phone')}
           type="tel"
-          placeholder="+1 (555) 000-0000"
+          placeholder="+1 (469) 442-5018"
           className={inputClass}
           disabled={status === 'submitting'}
         />

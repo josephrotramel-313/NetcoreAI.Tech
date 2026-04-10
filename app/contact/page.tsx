@@ -46,7 +46,7 @@ export default function ContactPage() {
 
                 {/* Email */}
                 <a
-                  href="mailto:hello@netcoreai.tech"
+                  href="mailto:netcoreaisolutions@gmail.com"
                   className="group flex items-center gap-4 p-5 rounded-2xl glass hover:border-[#00F0FF]/30 transition-all duration-200"
                 >
                   <div
@@ -59,14 +59,14 @@ export default function ContactPage() {
                     <div className="text-sm font-semibold text-[#EAEAEA] group-hover:text-[#00F0FF] transition-colors">
                       Send an Email
                     </div>
-                    <div className="text-xs text-[#888]">hello@netcoreai.tech</div>
+                    <div className="text-xs text-[#888]">netcoreaisolutions@gmail.com</div>
                   </div>
                   <div className="ml-auto text-[#888] group-hover:text-[#00F0FF] transition-colors">→</div>
                 </a>
 
                 {/* SMS */}
                 <a
-                  href="tel:+15550000000"
+                  href="tel:+14694425018"
                   className="group flex items-center gap-4 p-5 rounded-2xl glass hover:border-[#7A00FF]/30 transition-all duration-200"
                 >
                   <div
@@ -79,14 +79,14 @@ export default function ContactPage() {
                     <div className="text-sm font-semibold text-[#EAEAEA] group-hover:text-[#7A00FF] transition-colors">
                       Call or Text
                     </div>
-                    <div className="text-xs text-[#888]">+1 (555) 000-0000</div>
+                    <div className="text-xs text-[#888]">+1 (469) 442-5018</div>
                   </div>
                   <div className="ml-auto text-[#888] group-hover:text-[#7A00FF] transition-colors">→</div>
                 </a>
 
                 {/* SMS Link */}
                 <a
-                  href="sms:+15550000000"
+                  href="sms:+14694425018"
                   className="group flex items-center gap-4 p-5 rounded-2xl glass hover:border-[#00F0FF]/30 transition-all duration-200"
                 >
                   <div
