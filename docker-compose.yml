@@ -1,0 +1,58 @@
+services:
+  # ── Express backend ──────────────────────────────────────────────────────────
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: netcoreai_server
+    restart: unless-stopped
+    # Not exposed to host — nginx proxies /socket.io/ to this container internally
+    environment:
+      PORT: "5001"
+      # * is safe here because nginx controls external access
+      ALLOWED_ORIGINS: "*"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── Next.js frontend ─────────────────────────────────────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: netcoreai_web
+    restart: unless-stopped
+    # Not exposed to host — nginx proxies all traffic to this container
+    environment:
+      NODE_ENV: production
+      # Server-side only: Next.js API routes call Express over the internal Docker network
+      EXPRESS_INTERNAL_URL: "http://server:5001"
+    depends_on:
+      server:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  # ── nginx reverse proxy ───────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: netcoreai_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - web
+      - server
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
