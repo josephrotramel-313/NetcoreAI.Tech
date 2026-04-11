@@ -87,8 +87,8 @@ jobs:
 
             # Auto-clone on first deploy if the directory isn't a git repo yet.
             if [ ! -d "$PROJECT_DIR/.git" ]; then
-              echo "==> $PROJECT_DIR is not a git repo — cloning for the first time..."
-              mkdir -p "$PROJECT_DIR"
+              echo "==> $PROJECT_DIR is not a git repo — clearing and cloning for the first time..."
+              rm -rf "$PROJECT_DIR"
               git clone "$REPO_URL" "$PROJECT_DIR"
               echo "==> Clone complete"
             fi
