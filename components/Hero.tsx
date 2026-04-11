@@ -38,7 +38,7 @@ export default function Hero() {
               transition={{ duration: 0.8, delay: 0.1 }}
             >
               <h1 className="text-5xl md:text-6xl lg:text-7xl font-extrabold leading-[1.05] tracking-tight text-[#EAEAEA]">
-                Automate Your Business.{' '}
+                Automate Your Business. hello from VsCode{' '}
                 <span className="text-gradient">
                   Scale Without Hiring.
                 </span>
